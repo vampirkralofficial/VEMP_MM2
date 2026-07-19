@@ -1,16 +1,17 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║                   VEMP MM2 — ULTIMATE v3.0                    ║
+    ║                   VEMP MM2 — ULTIMATE v4.0                    ║
     ║            Murder Mystery 2 Script by VEMP                    ║
-    ║        UI: Rayfield Gen2 (Sirius Menu Library)               ║
-    ║          Version: 3.0.0 | Build: 5000+                       ║
+    ║          UI: WindUI (Footagesus Library)                     ║
+    ║          Version: 4.0.0 | Build: 5000+                       ║
     ║                                                               ║
-    ║  v3.0 CHANGES:                                                ║
+    ║  v4.0 CHANGES:                                                ║
+    ║  ✓ Switched from Rayfield to WindUI                          ║
     ║  ✓ Mobile Silent Aim (touch + screen center support)         ║
     ║  ✓ Optimized Auto Farm (cached coins, no lag)               ║
-    ║  ✓ Better namecall hook (multi-executor support)             ║
-    ║  ✓ Fixed typo in MurdererWarningSystem                       ║
-    ║  ✓ Smoother coin collection                                   ║
+    ║  ✓ Multi-executor namecall hook support                      ║
+    ║  ✓ WindUI modern interface with all features                 ║
+    ║  ✓ Enhanced UI organization                                   ║
     ╚══════════════════════════════════════════════════════════════╝
 ]]
 
@@ -45,14 +46,12 @@ do
         IsMobile = true
     end
     
-    -- Some devices have both touch and mouse, check screen size as fallback
     local screenSize = Camera.ViewportSize
     if screenSize.X < 800 and UserInputService.TouchEnabled then
         IsMobile = true
     end
 end
 
--- Track touch position for mobile
 UserInputService.InputChanged:Connect(function(input, gameProcessed)
     if input.UserInputType == Enum.UserInputType.Touch then
         TouchPosition = input.Position
@@ -67,7 +66,6 @@ end, false)
 
 local function GetAimPosition()
     if IsMobile then
-        -- On mobile, use last touch position, or center of screen if no touch
         if TouchPosition and TouchPosition.X > 0 then
             return TouchPosition
         end
@@ -88,6 +86,7 @@ local ExecutorInfo = {
     HasNewCClosure = false,
     HasFireTouchInterest = false,
     HasFireSignal = false,
+    HasGetConnections = false,
 }
 
 do
@@ -100,6 +99,8 @@ do
     end)
     ExecutorInfo.HasNewCClosure = pcall(function() return newcclosure end)
     ExecutorInfo.HasFireTouchInterest = pcall(function() return firetouchinterest end)
+    ExecutorInfo.HasGetConnections = pcall(function() return getconnections end)
+    ExecutorInfo.HasFireSignal = pcall(function() return firesignal end)
 end
 
 --====================================================================
@@ -123,7 +124,7 @@ local Config = {
         TracerThickness = 1,
         TracerOrigin = "Bottom",
         TextSize = 13,
-        TextFont = 2, -- Drawing.Fonts.Plex
+        TextFont = 2,
         InnocentColor = Color3.fromRGB(0, 255, 0),
         SheriffColor = Color3.fromRGB(0, 170, 255),
         MurdererColor = Color3.fromRGB(255, 0, 0),
@@ -151,7 +152,6 @@ local Config = {
         Prediction = 0.15,
         Resolver = true,
         TargetMode = "ClosestToMouse",
-        -- Mobile specific
         MobileUseScreenCenter = true,
         MobileFOVScale = 1.5,
     },
@@ -181,7 +181,7 @@ local Config = {
         Enabled = false,
         CoinDelay = 0.15,
         CollectMethod = "Teleport",
-        RefreshInterval = 3, -- seconds between coin cache refreshes
+        RefreshInterval = 3,
         MaxCoinsPerCycle = 1,
         SmoothTeleport = true,
         TeleportHeight = 3,
@@ -197,7 +197,6 @@ local Config = {
     WalkOnWalls = false,
     CustomCrosshair = false,
     MurdererWarning = true,
-    NotificationStyle = "Rayfield",
 }
 
 --====================================================================
@@ -245,33 +244,9 @@ local function GetPlayers()
     return list
 end
 
-local function GetDistance(from, to)
-    if typeof(from) == "Instance" and typeof(to) == "Instance" then
-        local fromPos = from:IsA("BasePart") and from.Position or (from:IsA("Model") and from:GetPivot().Position)
-        local toPos = to:IsA("BasePart") and to.Position or (to:IsA("Model") and to:GetPivot().Position)
-        if fromPos and toPos then
-            return (fromPos - toPos).Magnitude
-        end
-    elseif typeof(from) == "Vector3" and typeof(to) == "Vector3" then
-        return (from - to).Magnitude
-    end
-    return math.huge
-end
-
 local function WorldToScreen(worldPosition)
     local screenPosition, onScreen = Camera:WorldToViewportPoint(worldPosition)
     return Vector2.new(screenPosition.X, screenPosition.Y), onScreen
-end
-
-local function GetAimPosition()
-    if IsMobile then
-        if TouchPosition and TouchPosition.X > 0 then
-            return TouchPosition
-        end
-        return Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    else
-        return UserInputService:GetMouseLocation()
-    end
 end
 
 --====================================================================
@@ -359,7 +334,6 @@ CoinSystem.CachedCoins = {}
 CoinSystem.LastRefresh = 0
 CoinSystem.CacheValid = false
 
--- Known MM2 coin folder locations for faster lookup
 local CoinSearchPaths = {
     function() return Workspace:FindFirstChild("CoinContainer", true) end,
     function() return Workspace:FindFirstChild("Coins", true) end,
@@ -370,7 +344,6 @@ local CoinSearchPaths = {
 function CoinSystem.FindCoinsFast()
     local coins = {}
     
-    -- Try known folders first (much faster than full descendant scan)
     for _, searchFn in ipairs(CoinSearchPaths) do
         local ok, folder = pcall(searchFn)
         if ok and folder then
@@ -395,14 +368,12 @@ function CoinSystem.FindCoinsFast()
                     end
                 end
             end
-            -- If we found coins in a known folder, return early
             if #coins > 0 then
                 return coins
             end
         end
     end
     
-    -- Fallback: scan workspace children directly (not all descendants)
     for _, child in ipairs(Workspace:GetChildren()) do
         local name = child.Name:lower()
         if name:match("coin") or name:match("cash") or name:match("money") or name:match("pickup") then
@@ -423,7 +394,6 @@ function CoinSystem.FindCoinsFast()
         end
     end
     
-    -- Last resort: full scan but only if nothing found yet
     if #coins == 0 then
         for _, descendant in ipairs(Workspace:GetDescendants()) do
             local name = descendant.Name:lower()
@@ -459,7 +429,6 @@ function CoinSystem.RefreshCache()
 end
 
 function CoinSystem.GetCoins()
-    -- Only refresh if cache is stale
     if not CoinSystem.CacheValid or (tick() - CoinSystem.LastRefresh) >= Config.AutoFarm.RefreshInterval then
         CoinSystem.RefreshCache()
     end
@@ -472,9 +441,7 @@ function CoinSystem.GetNearestCoin(fromPosition)
     local nearestDistance = math.huge
     
     for _, coin in ipairs(coins) do
-        -- Verify coin still exists
         if coin.Object and coin.Object.Parent then
-            -- Update position in case it moved
             if coin.Object:IsA("BasePart") then
                 coin.Position = coin.Object.Position
             elseif coin.Object:IsA("Model") then
@@ -489,7 +456,6 @@ function CoinSystem.GetNearestCoin(fromPosition)
         end
     end
     
-    -- Clean up invalid coins from cache
     CoinSystem.CleanCache()
     
     return nearest, nearestDistance
@@ -810,7 +776,7 @@ CoinESPSystem.Objects = {}
 CoinESPSystem.Connections = {}
 CoinESPSystem.Enabled = false
 CoinESPSystem.LastUpdate = 0
-CoinESPSystem.UpdateInterval = 0.5 -- Update every 0.5s instead of every frame
+CoinESPSystem.UpdateInterval = 0.5
 
 function CoinESPSystem.Update()
     if not Config.CoinESP.Enabled then
@@ -821,14 +787,12 @@ function CoinESPSystem.Update()
         return
     end
     
-    -- Throttle updates
     if tick() - CoinESPSystem.LastUpdate < CoinESPSystem.UpdateInterval then return end
     CoinESPSystem.LastUpdate = tick()
     
     local coins = CoinSystem.GetCoins()
     local localRoot = GetRootPart(LocalPlayer)
     
-    -- Remove old objects
     for i = #CoinESPSystem.Objects, 1, -1 do
         SafeCall(function() CoinESPSystem.Objects[i]:Remove() end)
         table.remove(CoinESPSystem.Objects, i)
@@ -922,8 +886,6 @@ function FOVSystem.Update()
     FOVSystem.Circle.Thickness = Config.SilentAim.FOVThickness
     FOVSystem.Circle.Transparency = Config.SilentAim.FOVTransparency
     FOVSystem.Circle.Filled = Config.SilentAim.FOVFilled
-    
-    -- Use GetAimPosition for mobile compatibility
     FOVSystem.Circle.Position = GetAimPosition()
     FOVSystem.Circle.Visible = Config.SilentAim.FOVEnabled
 end
@@ -958,7 +920,6 @@ function SilentAimSystem.GetClosestPlayerToAim()
     local shortestDistance = Config.SilentAim.FOVRadius
     local aimPos = GetAimPosition()
     
-    -- On mobile with screen center, use larger FOV
     if IsMobile and Config.SilentAim.MobileUseScreenCenter then
         shortestDistance = Config.SilentAim.FOVRadius * Config.SilentAim.MobileFOVScale
     end
@@ -1055,7 +1016,6 @@ function SilentAimSystem.GetTargetPosition()
     
     local position = targetPart.Position
     
-    -- Velocity prediction
     if Config.SilentAim.Prediction > 0 then
         local rootPart = GetRootPart(target)
         if rootPart then
@@ -1067,7 +1027,6 @@ function SilentAimSystem.GetTargetPosition()
     return position
 end
 
--- Check if a remote is gun-related
 local function IsGunRemote(self)
     if not self then return false end
     
@@ -1084,19 +1043,16 @@ local function IsGunRemote(self)
     name = name:lower()
     parentName = parentName:lower()
     
-    -- Check remote name
     if name:match("gun") or name:match("shoot") or name:match("fire") or 
-       name:match("revolver") or name:match("weapon") or name:match("shoot") then
+       name:match("revolver") or name:match("weapon") then
         return true
     end
     
-    -- Check parent name (tool name)
     if parentName:match("gun") or parentName:match("revolver") or 
        parentName:match("pistol") or parentName:match("sheriff") then
         return true
     end
     
-    -- Check if self is inside a tool that's gun-related
     local current = self
     for i = 1, 5 do
         if not current or not current.Parent then break end
@@ -1110,7 +1066,6 @@ local function IsGunRemote(self)
     return false
 end
 
--- Method 1: hookmetamethod (preferred, works on most executors including mobile)
 function SilentAimSystem.HookWithMetamethod()
     if not ExecutorInfo.HasHookMetamethod then return false end
     
@@ -1146,7 +1101,6 @@ function SilentAimSystem.HookWithMetamethod()
     return success
 end
 
--- Method 2: getrawmetatable (fallback)
 function SilentAimSystem.HookWithRawMetatable()
     if not ExecutorInfo.HasGetRawMetatable or not ExecutorInfo.HasSetReadOnly then return false end
     
@@ -1218,17 +1172,14 @@ function SilentAimSystem.HookWithRawMetatable()
     return success
 end
 
--- Install hook using best available method
 function SilentAimSystem.InstallHook()
     if SilentAimSystem.HookInstalled then return true end
     
-    -- Try hookmetamethod first (most reliable on mobile)
     if SilentAimSystem.HookWithMetamethod() then
         SilentAimSystem.HookInstalled = true
         return true
     end
     
-    -- Fallback to getrawmetatable
     if SilentAimSystem.HookWithRawMetatable() then
         SilentAimSystem.HookInstalled = true
         return true
@@ -1240,9 +1191,6 @@ end
 
 function SilentAimSystem.UnhookNamecall()
     if not SilentAimSystem.HookInstalled then return end
-    
-    -- Note: hookmetamethod can't be easily unhooked on all executors
-    -- Disabling via Config flag is the primary method
     Config.SilentAim.Enabled = false
     SilentAimSystem.Enabled = false
     SilentAimSystem.Target = nil
@@ -1310,7 +1258,6 @@ function KnifeReachSystem.AutoKill()
     local localRoot = GetRootPart(LocalPlayer)
     if not localRoot then return end
     
-    -- Throttle kills
     if tick() - KnifeReachSystem.LastKillTime < Config.KnifeReach.KillDelay then return end
     
     local knife = nil
@@ -1342,7 +1289,7 @@ function KnifeReachSystem.AutoKill()
                         end
                     end)
                     KnifeReachSystem.LastKillTime = tick()
-                    break -- Only kill one per cycle
+                    break
                 end
             end
         end
@@ -1430,7 +1377,6 @@ function FlySystem.Start(speed)
             moveVector = moveVector - Vector3.new(0, 1, 0)
         end
         
-        -- Mobile fly controls (touch joystick)
         if IsMobile then
             local thumbstick = LocalPlayer.PlayerGui:FindFirstChild("TouchGui", true)
             if thumbstick then
@@ -1438,7 +1384,6 @@ function FlySystem.Start(speed)
                 if frame then
                     local thumb = frame:FindFirstChild("MoveThumbstickFrame", true)
                     if thumb and thumb:FindFirstChild("Image") then
-                        -- Basic mobile fly - use camera look vector for forward
                         moveVector = moveVector + cam.CFrame.LookVector
                     end
                 end
@@ -1662,24 +1607,20 @@ function AutoFarmSystem.Start()
     Config.AutoFarm.Enabled = true
     AutoFarmSystem.CoinsCollected = 0
     
-    -- Run in a separate thread to avoid blocking
     task.spawn(function()
         AutoFarmSystem.Running = true
         
-        -- Initial coin cache
         CoinSystem.RefreshCache()
         
         while AutoFarmSystem.Enabled and AutoFarmSystem.Running do
             local rootPart = GetRootPart(LocalPlayer)
             
             if rootPart and rootPart.Parent then
-                -- Get nearest coin from cache (does NOT scan every frame!)
                 local nearest = CoinSystem.GetNearestCoin(rootPart.Position)
                 
                 if nearest and nearest.Object and nearest.Object.Parent then
                     local coinPosition = nearest.Position
                     
-                    -- Update position in case coin moved
                     if nearest.Object:IsA("BasePart") then
                         coinPosition = nearest.Object.Position
                     elseif nearest.Object:IsA("Model") then
@@ -1687,20 +1628,16 @@ function AutoFarmSystem.Start()
                     end
                     
                     if Config.AutoFarm.CollectMethod == "Teleport" then
-                        -- Save original position
                         local originalCFrame = rootPart.CFrame
                         
                         if Config.AutoFarm.SmoothTeleport then
-                            -- Teleport slightly above coin to trigger touch
                             rootPart.CFrame = CFrame.new(coinPosition + Vector3.new(0, Config.AutoFarm.TeleportHeight, 0))
                             task.wait(Config.AutoFarm.CoinDelay)
                             
-                            -- Return to original position
                             if AutoFarmSystem.Enabled and rootPart.Parent then
                                 rootPart.CFrame = originalCFrame
                             end
                         else
-                            -- Instant teleport
                             rootPart.CFrame = CFrame.new(coinPosition)
                             task.wait(Config.AutoFarm.CoinDelay)
                             if AutoFarmSystem.Enabled and rootPart.Parent then
@@ -1711,7 +1648,6 @@ function AutoFarmSystem.Start()
                         AutoFarmSystem.CoinsCollected = AutoFarmSystem.CoinsCollected + 1
                         
                     elseif Config.AutoFarm.CollectMethod == "Touch" then
-                        -- Use firetouchinterest if available
                         if ExecutorInfo.HasFireTouchInterest and nearest.Object:IsA("BasePart") then
                             SafeCall(function()
                                 firetouchinterest(rootPart, nearest.Object, 0)
@@ -1719,7 +1655,6 @@ function AutoFarmSystem.Start()
                                 firetouchinterest(rootPart, nearest.Object, 1)
                             end)
                         else
-                            -- Fallback to teleport if firetouchinterest not available
                             local originalCFrame = rootPart.CFrame
                             rootPart.CFrame = CFrame.new(coinPosition)
                             task.wait(Config.AutoFarm.CoinDelay)
@@ -1731,18 +1666,14 @@ function AutoFarmSystem.Start()
                         AutoFarmSystem.CoinsCollected = AutoFarmSystem.CoinsCollected + 1
                     end
                     
-                    -- Invalidate cache so next cycle picks up new positions
                     CoinSystem.InvalidateCache()
                 else
-                    -- No coins found, wait longer before retry
                     task.wait(0.5)
                 end
             else
-                -- No root part, wait for respawn
                 task.wait(1)
             end
             
-            -- Small yield to prevent lag
             task.wait(Config.AutoFarm.CoinDelay)
         end
         
@@ -1869,7 +1800,7 @@ function AntiAFKSystem.Toggle()
 end
 
 --====================================================================
--- SECTION 19: MURDERER WARNING SYSTEM (FIXED TYPO)
+-- SECTION 19: MURDERER WARNING SYSTEM
 --====================================================================
 
 local MurdererWarningSystem = {}
@@ -1888,7 +1819,6 @@ function MurdererWarningSystem.Start()
         RoleDetector.UpdateRoles()
         local murderer = RoleDetector.KnownMurderer
         
-        -- Fixed typo: was "mururderer"
         if murderer and IsAlive(murderer) and murderer ~= LocalPlayer then
             local localRoot = GetRootPart(LocalPlayer)
             local murdererRoot = GetRootPart(murderer)
@@ -2100,784 +2030,873 @@ function CrosshairSystem.SetEnabled(enabled)
 end
 
 --====================================================================
--- SECTION 23: RAYFIELD UI INITIALIZATION
+-- SECTION 23: WINDUI INITIALIZATION
 --====================================================================
 
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
-local Window = Rayfield:CreateWindow({
-   Name = "VEMP MM2 | Ultimate v3.0",
-   LoadingTitle = "VEMP MM2 v3.0",
-   LoadingSubtitle = "by VEMP | Mobile-Optimized Build",
-   ConfigurationSaving = {
-      Enabled = true,
-      FolderName = "VEMP",
-      FileName = "VEMPMM2_v3"
-   },
-   Discord = {
-      Enabled = false,
-      Invite = "",
-      RememberJoins = true
-   },
-   KeySystem = false,
+local Window = WindUI:CreateWindow({
+    Name = "VEMP MM2 | Ultimate v4.0",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "VEMP",
+        FileName = "VEMPMM2_v4"
+    },
+    KeySystem = {
+        Enabled = false,
+    },
 })
 
 --====================================================================
 -- SECTION 24: TAB — COMBAT
 --====================================================================
 
-local CombatTab = Window:CreateTab("Combat", 4483362458)
+local CombatTab = Window:CreateTab({
+    Title = "Combat",
+    Icon = "swords",
+})
 
 -- Silent Aim
+local SilentAimSection = CombatTab:CreateSection("Silent Aim")
+
 local SilentAimToggle = CombatTab:CreateToggle({
-   Name = "Silent Aim",
-   CurrentValue = false,
-   Flag = "SilentAim_Enabled",
-   Callback = function(Value)
-       SilentAimSystem.SetEnabled(Value)
-   end,
+    Title = "Silent Aim",
+    Description = "Automatically aims at nearest player when shooting",
+    DefaultValue = false,
+    Callback = function(Value)
+        SilentAimSystem.SetEnabled(Value)
+    end,
 })
 
 local SilentAimFOVToggle = CombatTab:CreateToggle({
-   Name = "Show FOV Circle",
-   CurrentValue = false,
-   Flag = "SilentAim_FOV",
-   Callback = function(Value)
-       FOVSystem.SetEnabled(Value)
-   end,
+    Title = "Show FOV Circle",
+    Description = "Draws a circle showing your aim range",
+    DefaultValue = false,
+    Callback = function(Value)
+        FOVSystem.SetEnabled(Value)
+    end,
 })
 
 local SilentAimFOVRadius = CombatTab:CreateSlider({
-   Name = "FOV Radius",
-   Range = {10, 500},
-   Increment = 5,
-   Suffix = "px",
-   CurrentValue = 100,
-   Flag = "SilentAim_FOVRadius",
-   Callback = function(Value)
-       Config.SilentAim.FOVRadius = Value
-   end,
+    Title = "FOV Radius",
+    Description = "Radius of the FOV circle in pixels",
+    Min = 10,
+    Max = 500,
+    Increment = 5,
+    DefaultValue = 100,
+    Callback = function(Value)
+        Config.SilentAim.FOVRadius = Value
+    end,
 })
 
 local SilentAimWallCheck = CombatTab:CreateToggle({
-   Name = "Wall Check",
-   CurrentValue = false,
-   Flag = "SilentAim_WallCheck",
-   Callback = function(Value)
-       Config.SilentAim.WallCheck = Value
-   end,
+    Title = "Wall Check",
+    Description = "Only target players visible through walls",
+    DefaultValue = false,
+    Callback = function(Value)
+        Config.SilentAim.WallCheck = Value
+    end,
 })
 
 local SilentAimHitChance = CombatTab:CreateSlider({
-   Name = "Hit Chance",
-   Range = {1, 100},
-   Increment = 1,
-   Suffix = "%",
-   CurrentValue = 100,
-   Flag = "SilentAim_HitChance",
-   Callback = function(Value)
-       Config.SilentAim.HitChance = Value
-   end,
+    Title = "Hit Chance",
+    Description = "Percentage chance of hitting target",
+    Min = 1,
+    Max = 100,
+    Increment = 1,
+    DefaultValue = 100,
+    Callback = function(Value)
+        Config.SilentAim.HitChance = Value
+    end,
 })
 
 local SilentAimPrediction = CombatTab:CreateSlider({
-   Name = "Prediction",
-   Range = {0, 1},
-   Increment = 0.01,
-   Suffix = "s",
-   CurrentValue = 0.15,
-   Flag = "SilentAim_Prediction",
-   Callback = function(Value)
-       Config.SilentAim.Prediction = Value
-   end,
+    Title = "Prediction",
+    Description = "Velocity prediction for moving targets",
+    Min = 0,
+    Max = 1,
+    Increment = 0.01,
+    DefaultValue = 0.15,
+    Callback = function(Value)
+        Config.SilentAim.Prediction = Value
+    end,
 })
 
 local SilentAimTargetPart = CombatTab:CreateDropdown({
-   Name = "Target Part",
-   Options = {"Head", "Torso", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
-   CurrentOption = {"Head"},
-   MultipleOptions = false,
-   Flag = "SilentAim_TargetPart",
-   Callback = function(Options)
-       for _, option in ipairs(Options) do
-           Config.SilentAim.TargetPart = option
-       end
-   end,
+    Title = "Target Part",
+    Description = "Which body part to aim at",
+    Values = {"Head", "Torso", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
+    DefaultValue = {"Head"},
+    Multiple = false,
+    Callback = function(Options)
+        for _, option in ipairs(Options) do
+            Config.SilentAim.TargetPart = option
+        end
+    end,
 })
 
 local SilentAimTargetMode = CombatTab:CreateDropdown({
-   Name = "Target Mode",
-   Options = {"ClosestToMouse", "Closest", "Murderer"},
-   CurrentOption = {"ClosestToMouse"},
-   MultipleOptions = false,
-   Flag = "SilentAim_TargetMode",
-   Callback = function(Options)
-       for _, option in ipairs(Options) do
-           Config.SilentAim.TargetMode = option
-       end
-   end,
+    Title = "Target Mode",
+    Description = "How to select targets",
+    Values = {"ClosestToMouse", "Closest", "Murderer"},
+    DefaultValue = {"ClosestToMouse"},
+    Multiple = false,
+    Callback = function(Options)
+        for _, option in ipairs(Options) do
+            Config.SilentAim.TargetMode = option
+        end
+    end,
 })
 
--- Mobile-specific Silent Aim settings
-local MobileLabel = CombatTab:CreateLabel("--- Mobile Settings ---")
+-- Mobile Settings
+local MobileSection = CombatTab:CreateSection("Mobile Settings")
 
 local MobileScreenCenterToggle = CombatTab:CreateToggle({
-   Name = "Use Screen Center (Mobile)",
-   CurrentValue = true,
-   Flag = "SilentAim_MobileCenter",
-   Callback = function(Value)
-       Config.SilentAim.MobileUseScreenCenter = Value
-   end,
+    Title = "Use Screen Center (Mobile)",
+    Description = "Uses screen center for aiming on mobile devices",
+    DefaultValue = true,
+    Callback = function(Value)
+        Config.SilentAim.MobileUseScreenCenter = Value
+    end,
 })
 
 local MobileFOVScale = CombatTab:CreateSlider({
-   Name = "Mobile FOV Scale",
-   Range = {1, 3},
-   Increment = 0.1,
-   Suffix = "x",
-   CurrentValue = 1.5,
-   Flag = "SilentAim_MobileScale",
-   Callback = function(Value)
-       Config.SilentAim.MobileFOVScale = Value
-   end,
+    Title = "Mobile FOV Scale",
+    Description = "Scales the FOV circle larger on mobile",
+    Min = 1,
+    Max = 3,
+    Increment = 0.1,
+    DefaultValue = 1.5,
+    Callback = function(Value)
+        Config.SilentAim.MobileFOVScale = Value
+    end,
 })
 
-local PlatformLabel = CombatTab:CreateLabel(IsMobile and "Platform: MOBILE DETECTED" or "Platform: PC/Desktop")
+local PlatformLabel = CombatTab:CreateParagraph({
+    Title = "Platform",
+    Description = IsMobile and "MOBILE DETECTED" or "PC/Desktop",
+})
 
 -- Knife Reach
-local CombatSpacer1 = CombatTab:CreateLabel("--- Knife Reach ---")
+local KnifeSection = CombatTab:CreateSection("Knife Reach")
 
 local KnifeReachToggle = CombatTab:CreateToggle({
-   Name = "Knife Reach",
-   CurrentValue = false,
-   Flag = "KnifeReach_Enabled",
-   Callback = function(Value)
-       KnifeReachSystem.SetEnabled(Value)
-   end,
+    Title = "Knife Reach",
+    Description = "Expands hitboxes for knife kills",
+    DefaultValue = false,
+    Callback = function(Value)
+        KnifeReachSystem.SetEnabled(Value)
+    end,
 })
 
 local KnifeReachSlider = CombatTab:CreateSlider({
-   Name = "Reach Distance",
-   Range = {5, 100},
-   Increment = 1,
-   Suffix = " studs",
-   CurrentValue = 30,
-   Flag = "KnifeReach_Distance",
-   Callback = function(Value)
-       Config.KnifeReach.Reach = Value
-   end,
+    Title = "Reach Distance",
+    Description = "How far the knife can reach",
+    Min = 5,
+    Max = 100,
+    Increment = 1,
+    DefaultValue = 30,
+    Callback = function(Value)
+        Config.KnifeReach.Reach = Value
+    end,
 })
 
 local KnifeAutoKillToggle = CombatTab:CreateToggle({
-   Name = "Auto Kill (Murderer Only)",
-   CurrentValue = false,
-   Flag = "KnifeReach_AutoKill",
-   Callback = function(Value)
-       Config.KnifeReach.AutoKill = Value
-   end,
+    Title = "Auto Kill (Murderer Only)",
+    Description = "Automatically kills players within reach",
+    DefaultValue = false,
+    Callback = function(Value)
+        Config.KnifeReach.AutoKill = Value
+    end,
 })
 
 local KillDelaySlider = CombatTab:CreateSlider({
-   Name = "Kill Delay",
-   Range = {0.1, 2},
-   Increment = 0.1,
-   Suffix = "s",
-   CurrentValue = 0.5,
-   Flag = "KnifeReach_KillDelay",
-   Callback = function(Value)
-       Config.KnifeReach.KillDelay = Value
-   end,
+    Title = "Kill Delay",
+    Description = "Delay between auto kills",
+    Min = 0.1,
+    Max = 2,
+    Increment = 0.1,
+    DefaultValue = 0.5,
+    Callback = function(Value)
+        Config.KnifeReach.KillDelay = Value
+    end,
 })
 
 -- Hitbox Expander
-local CombatSpacer2 = CombatTab:CreateLabel("--- Hitbox Expander ---")
+local HitboxSection = CombatTab:CreateSection("Hitbox Expander")
 
 local HitboxToggle = CombatTab:CreateToggle({
-   Name = "Hitbox Expander",
-   CurrentValue = false,
-   Flag = "Hitbox_Enabled",
-   Callback = function(Value)
-       HitboxSystem.SetEnabled(Value)
-   end,
+    Title = "Hitbox Expander",
+    Description = "Expands player hitboxes",
+    DefaultValue = false,
+    Callback = function(Value)
+        HitboxSystem.SetEnabled(Value)
+    end,
 })
 
 local HitboxSizeSlider = CombatTab:CreateSlider({
-   Name = "Hitbox Size",
-   Range = {1, 50},
-   Increment = 1,
-   Suffix = " studs",
-   CurrentValue = 10,
-   Flag = "Hitbox_Size",
-   Callback = function(Value)
-       Config.Hitbox.Size = Value
-   end,
+    Title = "Hitbox Size",
+    Description = "Size of expanded hitboxes",
+    Min = 1,
+    Max = 50,
+    Increment = 1,
+    DefaultValue = 10,
+    Callback = function(Value)
+        Config.Hitbox.Size = Value
+    end,
 })
 
 local HitboxTransparencySlider = CombatTab:CreateSlider({
-   Name = "Hitbox Transparency",
-   Range = {0, 1},
-   Increment = 0.05,
-   CurrentValue = 0.7,
-   Flag = "Hitbox_Transparency",
-   Callback = function(Value)
-       Config.Hitbox.Transparency = Value
-   end,
+    Title = "Hitbox Transparency",
+    Description = "Transparency of expanded hitboxes",
+    Min = 0,
+    Max = 1,
+    Increment = 0.05,
+    DefaultValue = 0.7,
+    Callback = function(Value)
+        Config.Hitbox.Transparency = Value
+    end,
 })
 
 --====================================================================
 -- SECTION 25: TAB — VISUALS / ESP
 --====================================================================
 
-local VisualsTab = Window:CreateTab("Visuals", 4483362458)
+local VisualsTab = Window:CreateTab({
+    Title = "Visuals",
+    Icon = "eye",
+})
+
+local ESPSection = VisualsTab:CreateSection("Player ESP")
 
 local ESPToggle = VisualsTab:CreateToggle({
-   Name = "Player ESP",
-   CurrentValue = false,
-   Flag = "ESP_Enabled",
-   Callback = function(Value)
-       ESPSystem.SetEnabled(Value)
-   end,
+    Title = "Player ESP",
+    Description = "See players through walls",
+    DefaultValue = false,
+    Callback = function(Value)
+        ESPSystem.SetEnabled(Value)
+    end,
 })
 
 local ESPBoxToggle = VisualsTab:CreateToggle({
-   Name = "Box ESP",
-   CurrentValue = true,
-   Flag = "ESP_Box",
-   Callback = function(Value) Config.ESP.BoxEnabled = Value end,
+    Title = "Box ESP",
+    Description = "Draw boxes around players",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.BoxEnabled = Value end,
 })
 
 local ESPNameToggle = VisualsTab:CreateToggle({
-   Name = "Name ESP",
-   CurrentValue = true,
-   Flag = "ESP_Name",
-   Callback = function(Value) Config.ESP.NameEnabled = Value end,
+    Title = "Name ESP",
+    Description = "Show player names",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.NameEnabled = Value end,
 })
 
 local ESPDistanceToggle = VisualsTab:CreateToggle({
-   Name = "Distance ESP",
-   CurrentValue = true,
-   Flag = "ESP_Distance",
-   Callback = function(Value) Config.ESP.DistanceEnabled = Value end,
+    Title = "Distance ESP",
+    Description = "Show distance to players",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.DistanceEnabled = Value end,
 })
 
 local ESPTracerToggle = VisualsTab:CreateToggle({
-   Name = "Tracer ESP",
-   CurrentValue = true,
-   Flag = "ESP_Tracer",
-   Callback = function(Value) Config.ESP.TracerEnabled = Value end,
+    Title = "Tracer ESP",
+    Description = "Draw lines to players",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.TracerEnabled = Value end,
 })
 
 local ESPHealthBarToggle = VisualsTab:CreateToggle({
-   Name = "Health Bar",
-   CurrentValue = true,
-   Flag = "ESP_HealthBar",
-   Callback = function(Value) Config.ESP.HealthBarEnabled = Value end,
+    Title = "Health Bar",
+    Description = "Show health bars",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.HealthBarEnabled = Value end,
 })
 
 local ESPRoleColorToggle = VisualsTab:CreateToggle({
-   Name = "Role Colors",
-   CurrentValue = true,
-   Flag = "ESP_RoleColor",
-   Callback = function(Value) Config.ESP.RoleColorEnabled = Value end,
+    Title = "Role Colors",
+    Description = "Color ESP by player role",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.RoleColorEnabled = Value end,
 })
 
 local ESPShowInnocents = VisualsTab:CreateToggle({
-   Name = "Show Innocents",
-   CurrentValue = true,
-   Flag = "ESP_ShowInnocents",
-   Callback = function(Value) Config.ESP.ShowInnocents = Value end,
+    Title = "Show Innocents",
+    Description = "Show ESP for innocent players",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.ShowInnocents = Value end,
 })
 
 local ESPShowSheriff = VisualsTab:CreateToggle({
-   Name = "Show Sheriff",
-   CurrentValue = true,
-   Flag = "ESP_ShowSheriff",
-   Callback = function(Value) Config.ESP.ShowSheriff = Value end,
+    Title = "Show Sheriff",
+    Description = "Show ESP for sheriff",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.ShowSheriff = Value end,
 })
 
 local ESPShowMurderer = VisualsTab:CreateToggle({
-   Name = "Show Murderer",
-   CurrentValue = true,
-   Flag = "ESP_ShowMurderer",
-   Callback = function(Value) Config.ESP.ShowMurderer = Value end,
+    Title = "Show Murderer",
+    Description = "Show ESP for murderer",
+    DefaultValue = true,
+    Callback = function(Value) Config.ESP.ShowMurderer = Value end,
 })
 
 local ESPMaxDistance = VisualsTab:CreateSlider({
-   Name = "Max ESP Distance",
-   Range = {100, 5000},
-   Increment = 50,
-   Suffix = " studs",
-   CurrentValue = 1000,
-   Flag = "ESP_MaxDistance",
-   Callback = function(Value) Config.ESP.MaxDistance = Value end,
+    Title = "Max ESP Distance",
+    Description = "Maximum distance to show ESP",
+    Min = 100,
+    Max = 5000,
+    Increment = 50,
+    DefaultValue = 1000,
+    Callback = function(Value) Config.ESP.MaxDistance = Value end,
 })
 
 local ESPBoxThickness = VisualsTab:CreateSlider({
-   Name = "Box Thickness",
-   Range = {1, 5},
-   Increment = 1,
-   Suffix = "px",
-   CurrentValue = 1,
-   Flag = "ESP_BoxThickness",
-   Callback = function(Value) Config.ESP.BoxThickness = Value end,
+    Title = "Box Thickness",
+    Description = "Thickness of ESP boxes",
+    Min = 1,
+    Max = 5,
+    Increment = 1,
+    DefaultValue = 1,
+    Callback = function(Value) Config.ESP.BoxThickness = Value end,
 })
 
 local ESPTracerThickness = VisualsTab:CreateSlider({
-   Name = "Tracer Thickness",
-   Range = {1, 5},
-   Increment = 1,
-   Suffix = "px",
-   CurrentValue = 1,
-   Flag = "ESP_TracerThickness",
-   Callback = function(Value) Config.ESP.TracerThickness = Value end,
+    Title = "Tracer Thickness",
+    Description = "Thickness of tracer lines",
+    Min = 1,
+    Max = 5,
+    Increment = 1,
+    DefaultValue = 1,
+    Callback = function(Value) Config.ESP.TracerThickness = Value end,
 })
 
 local ESPTextSize = VisualsTab:CreateSlider({
-   Name = "Text Size",
-   Range = {8, 24},
-   Increment = 1,
-   Suffix = "px",
-   CurrentValue = 13,
-   Flag = "ESP_TextSize",
-   Callback = function(Value) Config.ESP.TextSize = Value end,
+    Title = "Text Size",
+    Description = "Size of ESP text",
+    Min = 8,
+    Max = 24,
+    Increment = 1,
+    DefaultValue = 13,
+    Callback = function(Value) Config.ESP.TextSize = Value end,
 })
 
 local TracerOriginDropdown = VisualsTab:CreateDropdown({
-   Name = "Tracer Origin",
-   Options = {"Bottom", "Middle", "Mouse"},
-   CurrentOption = {"Bottom"},
-   MultipleOptions = false,
-   Flag = "ESP_TracerOrigin",
-   Callback = function(Options)
-       for _, option in ipairs(Options) do
-           Config.ESP.TracerOrigin = option
-       end
-   end,
+    Title = "Tracer Origin",
+    Description = "Where tracer lines start from",
+    Values = {"Bottom", "Middle", "Mouse"},
+    DefaultValue = {"Bottom"},
+    Multiple = false,
+    Callback = function(Options)
+        for _, option in ipairs(Options) do
+            Config.ESP.TracerOrigin = option
+        end
+    end,
 })
 
-local VisualsSpacer1 = VisualsTab:CreateLabel("--- Coin ESP ---")
+-- Coin ESP
+local CoinESPSection = VisualsTab:CreateSection("Coin ESP")
 
 local CoinESPToggle = VisualsTab:CreateToggle({
-   Name = "Coin ESP",
-   CurrentValue = false,
-   Flag = "CoinESP_Enabled",
-   Callback = function(Value)
-       Config.CoinESP.Enabled = Value
-       if Value then CoinESPSystem.Start() else CoinESPSystem.Stop() end
-   end,
+    Title = "Coin ESP",
+    Description = "Show coins through walls",
+    DefaultValue = false,
+    Callback = function(Value)
+        Config.CoinESP.Enabled = Value
+        if Value then CoinESPSystem.Start() else CoinESPSystem.Stop() end
+    end,
 })
 
 local CoinESPDistanceToggle = VisualsTab:CreateToggle({
-   Name = "Show Coin Distance",
-   CurrentValue = true,
-   Flag = "CoinESP_ShowDistance",
-   Callback = function(Value) Config.CoinESP.ShowDistance = Value end,
+    Title = "Show Coin Distance",
+    Description = "Show distance to coins",
+    DefaultValue = true,
+    Callback = function(Value) Config.CoinESP.ShowDistance = Value end,
 })
 
-local VisualsSpacer2 = VisualsTab:CreateLabel("--- Crosshair ---")
+-- Crosshair
+local CrosshairSection = VisualsTab:CreateSection("Crosshair")
 
 local CrosshairToggle = VisualsTab:CreateToggle({
-   Name = "Custom Crosshair",
-   CurrentValue = false,
-   Flag = "Crosshair_Enabled",
-   Callback = function(Value)
-       CrosshairSystem.SetEnabled(Value)
-   end,
+    Title = "Custom Crosshair",
+    Description = "Draw a custom crosshair",
+    DefaultValue = false,
+    Callback = function(Value)
+        CrosshairSystem.SetEnabled(Value)
+    end,
 })
 
 --====================================================================
 -- SECTION 26: TAB — PLAYER / MOVEMENT
 --====================================================================
 
-local PlayerTab = Window:CreateTab("Player", 4483362458)
+local PlayerTab = Window:CreateTab({
+    Title = "Player",
+    Icon = "user",
+})
+
+local FlySection = PlayerTab:CreateSection("Fly")
 
 local FlyToggle = PlayerTab:CreateToggle({
-   Name = "Fly (Press F to toggle)",
-   CurrentValue = false,
-   Flag = "Fly_Enabled",
-   Callback = function(Value)
-       Config.Fly.Enabled = Value
-       if Value then FlySystem.Start(Config.Fly.Speed) else FlySystem.Stop() end
-   end,
+    Title = "Fly (Press F to toggle)",
+    Description = "Enable flying mode",
+    DefaultValue = false,
+    Callback = function(Value)
+        Config.Fly.Enabled = Value
+        if Value then FlySystem.Start(Config.Fly.Speed) else FlySystem.Stop() end
+    end,
 })
 
 local FlySpeedSlider = PlayerTab:CreateSlider({
-   Name = "Fly Speed",
-   Range = {10, 500},
-   Increment = 5,
-   Suffix = " spd",
-   CurrentValue = 50,
-   Flag = "Fly_Speed",
-   Callback = function(Value)
-       Config.Fly.Speed = Value
-       if FlySystem.Enabled then
-           FlySystem.Stop()
-           FlySystem.Start(Value)
-       end
-   end,
+    Title = "Fly Speed",
+    Description = "Speed while flying",
+    Min = 10,
+    Max = 500,
+    Increment = 5,
+    DefaultValue = 50,
+    Callback = function(Value)
+        Config.Fly.Speed = Value
+        if FlySystem.Enabled then
+            FlySystem.Stop()
+            FlySystem.Start(Value)
+        end
+    end,
 })
 
-local PlayerSpacer1 = PlayerTab:CreateLabel("--- Speed / Jump ---")
+local SpeedSection = PlayerTab:CreateSection("Speed / Jump")
 
 local SpeedToggle = PlayerTab:CreateToggle({
-   Name = "Walk Speed",
-   CurrentValue = false,
-   Flag = "Speed_Enabled",
-   Callback = function(Value)
-       Config.Movement.SpeedEnabled = Value
-       if Value then MovementSystem.SetWalkSpeed(Config.Movement.WalkSpeed) else MovementSystem.ResetWalkSpeed() end
-   end,
+    Title = "Walk Speed",
+    Description = "Modify your walk speed",
+    DefaultValue = false,
+    Callback = function(Value)
+        Config.Movement.SpeedEnabled = Value
+        if Value then MovementSystem.SetWalkSpeed(Config.Movement.WalkSpeed) else MovementSystem.ResetWalkSpeed() end
+    end,
 })
 
 local SpeedSlider = PlayerTab:CreateSlider({
-   Name = "Speed Value",
-   Range = {16, 500},
-   Increment = 1,
-   Suffix = " spd",
-   CurrentValue = 16,
-   Flag = "Speed_Value",
-   Callback = function(Value)
-       Config.Movement.WalkSpeed = Value
-       if Config.Movement.SpeedEnabled then MovementSystem.SetWalkSpeed(Value) end
-   end,
+    Title = "Speed Value",
+    Description = "Walk speed value",
+    Min = 16,
+    Max = 500,
+    Increment = 1,
+    DefaultValue = 16,
+    Callback = function(Value)
+        Config.Movement.WalkSpeed = Value
+        if Config.Movement.SpeedEnabled then MovementSystem.SetWalkSpeed(Value) end
+    end,
 })
 
 local JumpToggle = PlayerTab:CreateToggle({
-   Name = "Jump Power",
-   CurrentValue = false,
-   Flag = "Jump_Enabled",
-   Callback = function(Value)
-       Config.Movement.JumpEnabled = Value
-       if Value then MovementSystem.SetJumpPower(Config.Movement.JumpPower) else MovementSystem.ResetJumpPower() end
-   end,
+    Title = "Jump Power",
+    Description = "Modify your jump power",
+    DefaultValue = false,
+    Callback = function(Value)
+        Config.Movement.JumpEnabled = Value
+        if Value then MovementSystem.SetJumpPower(Config.Movement.JumpPower) else MovementSystem.ResetJumpPower() end
+    end,
 })
 
 local JumpSlider = PlayerTab:CreateSlider({
-   Name = "Jump Value",
-   Range = {50, 500},
-   Increment = 1,
-   Suffix = " pwr",
-   CurrentValue = 50,
-   Flag = "Jump_Value",
-   Callback = function(Value)
-       Config.Movement.JumpPower = Value
-       if Config.Movement.JumpEnabled then MovementSystem.SetJumpPower(Value) end
-   end,
+    Title = "Jump Value",
+    Description = "Jump power value",
+    Min = 50,
+    Max = 500,
+    Increment = 1,
+    DefaultValue = 50,
+    Callback = function(Value)
+        Config.Movement.JumpPower = Value
+        if Config.Movement.JumpEnabled then MovementSystem.SetJumpPower(Value) end
+    end,
 })
 
-local PlayerSpacer2 = PlayerTab:CreateLabel("--- Other ---")
+local OtherSection = PlayerTab:CreateSection("Other")
 
 local NoclipToggle = PlayerTab:CreateToggle({
-   Name = "Noclip",
-   CurrentValue = false,
-   Flag = "Noclip_Enabled",
-   Callback = function(Value) MovementSystem.SetNoclip(Value) end,
+    Title = "Noclip",
+    Description = "Walk through walls",
+    DefaultValue = false,
+    Callback = function(Value) MovementSystem.SetNoclip(Value) end,
 })
 
 local InfiniteJumpToggle = PlayerTab:CreateToggle({
-   Name = "Infinite Jump",
-   CurrentValue = false,
-   Flag = "InfiniteJump_Enabled",
-   Callback = function(Value) MovementSystem.SetInfiniteJump(Value) end,
+    Title = "Infinite Jump",
+    Description = "Jump infinitely in the air",
+    DefaultValue = false,
+    Callback = function(Value) MovementSystem.SetInfiniteJump(Value) end,
 })
 
 local WalkOnWallsToggle = PlayerTab:CreateToggle({
-   Name = "Walk On Walls",
-   CurrentValue = false,
-   Flag = "WalkOnWalls_Enabled",
-   Callback = function(Value) WalkOnWallsSystem.SetEnabled(Value) end,
+    Title = "Walk On Walls",
+    Description = "Walk on any surface",
+    DefaultValue = false,
+    Callback = function(Value) WalkOnWallsSystem.SetEnabled(Value) end,
 })
 
 local GodModeToggle = PlayerTab:CreateToggle({
-   Name = "God Mode",
-   CurrentValue = false,
-   Flag = "GodMode_Enabled",
-   Callback = function(Value) GodModeSystem.SetEnabled(Value) end,
+    Title = "God Mode",
+    Description = "Infinite health",
+    DefaultValue = false,
+    Callback = function(Value) GodModeSystem.SetEnabled(Value) end,
 })
 
 local AntiAFKToggle = PlayerTab:CreateToggle({
-   Name = "Anti AFK",
-   CurrentValue = true,
-   Flag = "AntiAFK_Enabled",
-   Callback = function(Value)
-       if Value then AntiAFKSystem.Start() else AntiAFKSystem.Stop() end
-   end,
+    Title = "Anti AFK",
+    Description = "Prevent being kicked for inactivity",
+    DefaultValue = true,
+    Callback = function(Value)
+        if Value then AntiAFKSystem.Start() else AntiAFKSystem.Stop() end
+    end,
 })
 
 --====================================================================
 -- SECTION 27: TAB — TELEPORT
 --====================================================================
 
-local TeleportTab = Window:CreateTab("Teleport", 4483362458)
+local TeleportTab = Window:CreateTab({
+    Title = "Teleport",
+    Icon = "map-pin",
+})
+
+local TeleportSection = TeleportTab:CreateSection("Player Teleport")
+
+local SelectedTeleportPlayer = ""
 
 local TeleportPlayerDropdown = TeleportTab:CreateDropdown({
-   Name = "Select Player",
-   Options = TeleportSystem.GetPlayerList(),
-   CurrentOption = {""},
-   MultipleOptions = false,
-   Flag = "Teleport_Player",
-   Callback = function(Options) end,
+    Title = "Select Player",
+    Description = "Choose a player to teleport to",
+    Values = TeleportSystem.GetPlayerList(),
+    DefaultValue = {""},
+    Multiple = false,
+    Callback = function(Options)
+        for _, option in ipairs(Options) do
+            SelectedTeleportPlayer = option
+        end
+    end,
 })
 
 local RefreshPlayersButton = TeleportTab:CreateButton({
-   Name = "Refresh Player List",
-   Callback = function()
-       TeleportPlayerDropdown:Refresh(TeleportSystem.GetPlayerList())
-   end,
+    Title = "Refresh Player List",
+    Description = "Update the player list",
+    Callback = function()
+        TeleportPlayerDropdown:Refresh(TeleportSystem.GetPlayerList())
+    end,
 })
 
 local TeleportToPlayerButton = TeleportTab:CreateButton({
-   Name = "Teleport to Selected Player",
-   Callback = function()
-       local selected = TeleportPlayerDropdown:GetCurrentOption()
-       if selected and selected[1] then
-           local target = TeleportSystem.GetPlayerByName(selected[1])
-           if target then TeleportSystem.ToPlayer(target) end
-       end
-   end,
+    Title = "Teleport to Selected Player",
+    Description = "Teleport to the selected player",
+    Callback = function()
+        if SelectedTeleportPlayer and SelectedTeleportPlayer ~= "" then
+            local target = TeleportSystem.GetPlayerByName(SelectedTeleportPlayer)
+            if target then TeleportSystem.ToPlayer(target) end
+        end
+    end,
 })
 
+local RoleTeleportSection = TeleportTab:CreateSection("Role Teleport")
+
 local TeleportToMurdererButton = TeleportTab:CreateButton({
-   Name = "Teleport to Murderer",
-   Callback = function()
-       RoleDetector.UpdateRoles()
-       if RoleDetector.KnownMurderer then TeleportSystem.ToPlayer(RoleDetector.KnownMurderer) end
-   end,
+    Title = "Teleport to Murderer",
+    Description = "Teleport to the detected murderer",
+    Callback = function()
+        RoleDetector.UpdateRoles()
+        if RoleDetector.KnownMurderer then TeleportSystem.ToPlayer(RoleDetector.KnownMurderer) end
+    end,
 })
 
 local TeleportToSheriffButton = TeleportTab:CreateButton({
-   Name = "Teleport to Sheriff",
-   Callback = function()
-       RoleDetector.UpdateRoles()
-       if RoleDetector.KnownSheriff then TeleportSystem.ToPlayer(RoleDetector.KnownSheriff) end
-   end,
+    Title = "Teleport to Sheriff",
+    Description = "Teleport to the detected sheriff",
+    Callback = function()
+        RoleDetector.UpdateRoles()
+        if RoleDetector.KnownSheriff then TeleportSystem.ToPlayer(RoleDetector.KnownSheriff) end
+    end,
 })
 
+local LocationTeleportSection = TeleportTab:CreateSection("Location Teleport")
+
 local TeleportToSpawnButton = TeleportTab:CreateButton({
-   Name = "Teleport to Spawn",
-   Callback = function() TeleportSystem.ToPosition(TeleportSystem.GetSpawnPosition()) end,
+    Title = "Teleport to Spawn",
+    Description = "Teleport to spawn location",
+    Callback = function()
+        TeleportSystem.ToPosition(TeleportSystem.GetSpawnPosition())
+    end,
 })
 
 local TeleportToNearestCoinButton = TeleportTab:CreateButton({
-   Name = "Teleport to Nearest Coin",
-   Callback = function() TeleportSystem.TeleportToNearestCoin() end,
+    Title = "Teleport to Nearest Coin",
+    Description = "Teleport to the closest coin",
+    Callback = function()
+        TeleportSystem.TeleportToNearestCoin()
+    end,
 })
 
 local ReturnToLastPositionButton = TeleportTab:CreateButton({
-   Name = "Return to Last Position",
-   Callback = function() TeleportSystem.ReturnToLastPosition() end,
+    Title = "Return to Last Position",
+    Description = "Go back to where you were before teleporting",
+    Callback = function()
+        TeleportSystem.ReturnToLastPosition()
+    end,
 })
 
 --====================================================================
--- SECTION 28: TAB — AUTO FARM (IMPROVED UI)
+-- SECTION 28: TAB — AUTO FARM
 --====================================================================
 
-local AutoFarmTab = Window:CreateTab("Auto Farm", 4483362458)
+local AutoFarmTab = Window:CreateTab({
+    Title = "Auto Farm",
+    Icon = "coins",
+})
+
+local AutoFarmSection = AutoFarmTab:CreateSection("Coin Auto Farm (Optimized)")
 
 local AutoFarmToggle = AutoFarmTab:CreateToggle({
-   Name = "Auto Farm Coins (Optimized)",
-   CurrentValue = false,
-   Flag = "AutoFarm_Enabled",
-   Callback = function(Value)
-       if Value then AutoFarmSystem.Start() else AutoFarmSystem.Stop() end
-   end,
+    Title = "Auto Farm Coins",
+    Description = "Automatically collect coins (optimized, no lag)",
+    DefaultValue = false,
+    Callback = function(Value)
+        if Value then AutoFarmSystem.Start() else AutoFarmSystem.Stop() end
+    end,
 })
 
 local AutoFarmMethod = AutoFarmTab:CreateDropdown({
-   Name = "Collection Method",
-   Options = {"Teleport", "Touch"},
-   CurrentOption = {"Teleport"},
-   MultipleOptions = false,
-   Flag = "AutoFarm_Method",
-   Callback = function(Options)
-       for _, option in ipairs(Options) do
-           Config.AutoFarm.CollectMethod = option
-       end
-   end,
+    Title = "Collection Method",
+    Description = "How to collect coins",
+    Values = {"Teleport", "Touch"},
+    DefaultValue = {"Teleport"},
+    Multiple = false,
+    Callback = function(Options)
+        for _, option in ipairs(Options) do
+            Config.AutoFarm.CollectMethod = option
+        end
+    end,
 })
 
 local AutoFarmDelay = AutoFarmTab:CreateSlider({
-   Name = "Collection Delay",
-   Range = {0.05, 1},
-   Increment = 0.05,
-   Suffix = "s",
-   CurrentValue = 0.15,
-   Flag = "AutoFarm_Delay",
-   Callback = function(Value)
-       Config.AutoFarm.CoinDelay = Value
-   end,
+    Title = "Collection Delay",
+    Description = "Delay between coin collections",
+    Min = 0.05,
+    Max = 1,
+    Increment = 0.05,
+    DefaultValue = 0.15,
+    Callback = function(Value)
+        Config.AutoFarm.CoinDelay = Value
+    end,
 })
 
 local AutoFarmRefresh = AutoFarmTab:CreateSlider({
-   Name = "Coin Cache Refresh (Anti-Lag)",
-   Range = {1, 10},
-   Increment = 1,
-   Suffix = "s",
-   CurrentValue = 3,
-   Flag = "AutoFarm_Refresh",
-   Callback = function(Value)
-       Config.AutoFarm.RefreshInterval = Value
-   end,
+    Title = "Coin Cache Refresh (Anti-Lag)",
+    Description = "How often to refresh coin cache in seconds",
+    Min = 1,
+    Max = 10,
+    Increment = 1,
+    DefaultValue = 3,
+    Callback = function(Value)
+        Config.AutoFarm.RefreshInterval = Value
+    end,
 })
 
 local AutoFarmSmoothToggle = AutoFarmTab:CreateToggle({
-   Name = "Smooth Teleport (Less Laggy)",
-   CurrentValue = true,
-   Flag = "AutoFarm_Smooth",
-   Callback = function(Value)
-       Config.AutoFarm.SmoothTeleport = Value
-   end,
+    Title = "Smooth Teleport",
+    Description = "Teleport above coins for smoother collection",
+    DefaultValue = true,
+    Callback = function(Value)
+        Config.AutoFarm.SmoothTeleport = Value
+    end,
 })
 
 local AutoFarmTeleportHeight = AutoFarmTab:CreateSlider({
-   Name = "Teleport Height Offset",
-   Range = {1, 10},
-   Increment = 1,
-   Suffix = " studs",
-   CurrentValue = 3,
-   Flag = "AutoFarm_Height",
-   Callback = function(Value)
-       Config.AutoFarm.TeleportHeight = Value
-   end,
+    Title = "Teleport Height Offset",
+    Description = "Height above coin to teleport",
+    Min = 1,
+    Max = 10,
+    Increment = 1,
+    DefaultValue = 3,
+    Callback = function(Value)
+        Config.AutoFarm.TeleportHeight = Value
+    end,
 })
 
-local AutoFarmSpacer = AutoFarmTab:CreateLabel("--- Stats ---")
+local AutoFarmStatsSection = AutoFarmTab:CreateSection("Stats")
 
 local AutoFarmStatsButton = AutoFarmTab:CreateButton({
-   Name = "Show Farm Stats",
-   Callback = function()
-       local stats = AutoFarmSystem.GetStats()
-       Rayfield:Notify({
-           Title = "VEMP MM2 - Farm Stats",
-           Content = "Collected: " .. stats.Collected .. " | Available: " .. stats.AvailableCoins .. " | Running: " .. tostring(stats.Running),
-           Duration = 5,
-       })
-   end,
+    Title = "Show Farm Stats",
+    Description = "Show coins collected and available",
+    Callback = function()
+        local stats = AutoFarmSystem.GetStats()
+        WindUI:Notify({
+            Title = "VEMP MM2 - Farm Stats",
+            Description = "Collected: " .. stats.Collected .. " | Available: " .. stats.AvailableCoins .. " | Running: " .. tostring(stats.Running),
+            Duration = 5,
+        })
+    end,
 })
 
 local CoinCountButton = AutoFarmTab:CreateButton({
-   Name = "Count Available Coins",
-   Callback = function()
-       local count = CoinSystem.GetCoinCount()
-       Rayfield:Notify({
-           Title = "VEMP MM2",
-           Content = "Found " .. count .. " coins on the map.",
-           Duration = 5,
-       })
-   end,
+    Title = "Count Available Coins",
+    Description = "Count coins currently on the map",
+    Callback = function()
+        local count = CoinSystem.GetCoinCount()
+        WindUI:Notify({
+            Title = "VEMP MM2",
+            Description = "Found " .. count .. " coins on the map.",
+            Duration = 5,
+        })
+    end,
 })
 
 local AutoFarmInfo = AutoFarmTab:CreateParagraph({
-   Title = "Auto Farm v3.0 - Optimized",
-   Content = "IMPROVED: Coins are now cached and only refreshed every few seconds instead of every frame. This prevents the game from lagging. The collection runs in a separate thread to avoid blocking."
+    Title = "Auto Farm v4.0 - Optimized",
+    Description = "Coins are cached and only refreshed every few seconds instead of every frame. Collection runs in a separate thread to prevent lag.",
 })
 
 --====================================================================
 -- SECTION 29: TAB — SETTINGS
 --====================================================================
 
-local SettingsTab = Window:CreateTab("Settings", 4483362458)
-
-local DestroyUIButton = SettingsTab:CreateButton({
-   Name = "Destroy UI",
-   Callback = function()
-       ESPSystem.Stop()
-       CoinESPSystem.Stop()
-       SilentAimSystem.UnhookNamecall()
-       FlySystem.Stop()
-       MovementSystem.SetNoclip(false)
-       MovementSystem.SetInfiniteJump(false)
-       HitboxSystem.SetEnabled(false)
-       CrosshairSystem.SetEnabled(false)
-       Rayfield:Destroy()
-   end,
+local SettingsTab = Window:CreateTab({
+    Title = "Settings",
+    Icon = "settings",
 })
 
-local SettingsSpacer1 = SettingsTab:CreateLabel("--- Role Info ---")
+local UISettingsSection = SettingsTab:CreateSection("UI Settings")
+
+local DestroyUIButton = SettingsTab:CreateButton({
+    Title = "Destroy UI",
+    Description = "Remove the UI and stop all features",
+    Callback = function()
+        ESPSystem.Stop()
+        CoinESPSystem.Stop()
+        SilentAimSystem.UnhookNamecall()
+        FlySystem.Stop()
+        MovementSystem.SetNoclip(false)
+        MovementSystem.SetInfiniteJump(false)
+        HitboxSystem.SetEnabled(false)
+        CrosshairSystem.SetEnabled(false)
+        WalkOnWallsSystem.SetEnabled(false)
+        GodModeSystem.SetEnabled(false)
+        AutoFarmSystem.Stop()
+        FOVSystem.SetEnabled(false)
+        if Window then
+            Window:Destroy()
+        end
+    end,
+})
+
+local RoleInfoSection = SettingsTab:CreateSection("Role Info")
 
 local CheckRoleButton = SettingsTab:CreateButton({
-   Name = "Check Your Role",
-   Callback = function()
-       local role = RoleDetector.GetLocalRole()
-       Rayfield:Notify({Title = "VEMP MM2 - Role", Content = "You are: " .. role, Duration = 5})
-   end,
+    Title = "Check Your Role",
+    Description = "See what role you currently are",
+    Callback = function()
+        local role = RoleDetector.GetLocalRole()
+        WindUI:Notify({
+            Title = "VEMP MM2 - Role",
+            Description = "You are: " .. role,
+            Duration = 5,
+        })
+    end,
 })
 
 local CheckMurdererButton = SettingsTab:CreateButton({
-   Name = "Check Murderer",
-   Callback = function()
-       RoleDetector.UpdateRoles()
-       if RoleDetector.KnownMurderer then
-           Rayfield:Notify({Title = "VEMP MM2 - Murderer", Content = "Murderer: " .. RoleDetector.KnownMurderer.Name, Duration = 5})
-       else
-           Rayfield:Notify({Title = "VEMP MM2 - Murderer", Content = "Murderer not detected yet.", Duration = 5})
-       end
-   end,
+    Title = "Check Murderer",
+    Description = "See who the murderer is",
+    Callback = function()
+        RoleDetector.UpdateRoles()
+        if RoleDetector.KnownMurderer then
+            WindUI:Notify({
+                Title = "VEMP MM2 - Murderer",
+                Description = "Murderer: " .. RoleDetector.KnownMurderer.Name,
+                Duration = 5,
+            })
+        else
+            WindUI:Notify({
+                Title = "VEMP MM2 - Murderer",
+                Description = "Murderer not detected yet.",
+                Duration = 5,
+            })
+        end
+    end,
 })
 
 local CheckSheriffButton = SettingsTab:CreateButton({
-   Name = "Check Sheriff",
-   Callback = function()
-       RoleDetector.UpdateRoles()
-       if RoleDetector.KnownSheriff then
-           Rayfield:Notify({Title = "VEMP MM2 - Sheriff", Content = "Sheriff: " .. RoleDetector.KnownSheriff.Name, Duration = 5})
-       else
-           Rayfield:Notify({Title = "VEMP MM2 - Sheriff", Content = "Sheriff not detected yet.", Duration = 5})
-       end
-   end,
+    Title = "Check Sheriff",
+    Description = "See who the sheriff is",
+    Callback = function()
+        RoleDetector.UpdateRoles()
+        if RoleDetector.KnownSheriff then
+            WindUI:Notify({
+                Title = "VEMP MM2 - Sheriff",
+                Description = "Sheriff: " .. RoleDetector.KnownSheriff.Name,
+                Duration = 5,
+            })
+        else
+            WindUI:Notify({
+                Title = "VEMP MM2 - Sheriff",
+                Description = "Sheriff not detected yet.",
+                Duration = 5,
+            })
+        end
+    end,
 })
 
-local SettingsSpacer2 = SettingsTab:CreateLabel("--- Executor Info ---")
+local ExecutorSection = SettingsTab:CreateSection("Executor Info")
 
 local ExecutorInfoParagraph = SettingsTab:CreateParagraph({
-   Title = "Executor Capabilities",
-   Content = "Platform: " .. (IsMobile and "MOBILE" or "PC/Desktop") .. 
-     "\nhookmetamethod: " .. tostring(ExecutorInfo.HasHookMetamethod) ..
-     "\ngetrawmetatable: " .. tostring(ExecutorInfo.HasGetRawMetatable) ..
-     "\nsetreadonly: " .. tostring(ExecutorInfo.HasSetReadOnly) ..
-     "\nnewcclosure: " .. tostring(ExecutorInfo.HasNewCClosure) ..
-     "\nfiretouchinterest: " .. tostring(ExecutorInfo.HasFireTouchInterest)
+    Title = "Executor Capabilities",
+    Description = "Platform: " .. (IsMobile and "MOBILE" or "PC/Desktop") .. 
+      "\nhookmetamethod: " .. tostring(ExecutorInfo.HasHookMetamethod) ..
+      "\ngetrawmetatable: " .. tostring(ExecutorInfo.HasGetRawMetatable) ..
+      "\nsetreadonly: " .. tostring(ExecutorInfo.HasSetReadOnly) ..
+      "\nnewcclosure: " .. tostring(ExecutorInfo.HasNewCClosure) ..
+      "\nfiretouchinterest: " .. tostring(ExecutorInfo.HasFireTouchInterest),
 })
 
-local SettingsSpacer3 = SettingsTab:CreateLabel("--- Config ---")
+local ConfigSection = SettingsTab:CreateSection("Config")
 
 local ResetAllButton = SettingsTab:CreateButton({
-   Name = "Reset All Features",
-   Callback = function()
-       ESPSystem.SetEnabled(false)
-       CoinESPSystem.Stop()
-       SilentAimSystem.SetEnabled(false)
-       KnifeReachSystem.SetEnabled(false)
-       FlySystem.Stop()
-       MovementSystem.SetNoclip(false)
-       MovementSystem.SetInfiniteJump(false)
-       MovementSystem.ResetWalkSpeed()
-       MovementSystem.ResetJumpPower()
-       HitboxSystem.SetEnabled(false)
-       CrosshairSystem.SetEnabled(false)
-       WalkOnWallsSystem.SetEnabled(false)
-       GodModeSystem.SetEnabled(false)
-       AutoFarmSystem.Stop()
-       FOVSystem.SetEnabled(false)
-       Rayfield:Notify({Title = "VEMP MM2", Content = "All features have been reset.", Duration = 3})
-   end,
+    Title = "Reset All Features",
+    Description = "Disable all active features",
+    Callback = function()
+        ESPSystem.SetEnabled(false)
+        CoinESPSystem.Stop()
+        SilentAimSystem.SetEnabled(false)
+        KnifeReachSystem.SetEnabled(false)
+        FlySystem.Stop()
+        MovementSystem.SetNoclip(false)
+        MovementSystem.SetInfiniteJump(false)
+        MovementSystem.ResetWalkSpeed()
+        MovementSystem.ResetJumpPower()
+        HitboxSystem.SetEnabled(false)
+        CrosshairSystem.SetEnabled(false)
+        WalkOnWallsSystem.SetEnabled(false)
+        GodModeSystem.SetEnabled(false)
+        AutoFarmSystem.Stop()
+        FOVSystem.SetEnabled(false)
+        WindUI:Notify({
+            Title = "VEMP MM2",
+            Description = "All features have been reset.",
+            Duration = 3,
+        })
+    end,
 })
 
-local SettingsSpacer4 = SettingsTab:CreateLabel("--- About ---")
+local AboutSection = SettingsTab:CreateSection("About")
 
 local AboutParagraph = SettingsTab:CreateParagraph({
-   Title = "VEMP MM2 - Ultimate Edition v3.0",
-   Content = "Version: 3.0.0\nUI: Rayfield Gen2 (Sirius)\n\nv3.0 CHANGES:\n✓ Mobile Silent Aim (touch + screen center)\n✓ Optimized Auto Farm (cached coins, no lag)\n✓ Multi-executor namecall hook support\n✓ Fixed MurdererWarning typo\n✓ Smooth teleport for auto farm\n✓ Coin cache refresh interval setting\n✓ Better gun remote detection\n✓ Mobile platform auto-detection\n✓ Touch position tracking for FOV\n✓ Executor capability detection\n\nFeatures:\n- Player ESP (Box, Name, Distance, Tracer, Health, Role)\n- Coin ESP (throttled updates)\n- Silent Aim (FOV, Prediction, Wall Check, Mobile)\n- Knife Reach & Auto Kill\n- Hitbox Expander\n- Fly System\n- Speed / Jump Modifiers\n- Noclip, Infinite Jump\n- Walk On Walls, God Mode\n- Anti AFK\n- Teleport System\n- Auto Farm Coins (optimized)\n- Custom Crosshair\n- Role Detection\n\nMade with love by VEMP."
+    Title = "VEMP MM2 - Ultimate Edition v4.0",
+    Description = "Version: 4.0.0\nUI: WindUI (Footagesus)\nPlatform: " .. (IsMobile and "MOBILE" or "PC/Desktop") .. "\n\nv4.0:\n- Switched to WindUI\n- Mobile silent aim\n- Optimized auto farm\n- Multi-executor support\n- All v3.0 fixes preserved\n\nFeatures:\n- Player ESP (Box, Name, Distance, Tracer, Health, Role)\n- Coin ESP (throttled)\n- Silent Aim (FOV, Prediction, Wall Check, Mobile)\n- Knife Reach & Auto Kill\n- Hitbox Expander\n- Fly System\n- Speed / Jump Modifiers\n- Noclip, Infinite Jump\n- Walk On Walls, God Mode\n- Anti AFK\n- Teleport System\n- Auto Farm Coins (optimized)\n- Custom Crosshair\n- Role Detection\n\nMade with love by VEMP.",
 })
 
 --====================================================================
--- SECTION 30: KEYBIND HANDLING (MOBILE-AWARE)
+-- SECTION 30: KEYBIND HANDLING
 --====================================================================
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     
-    -- Fly toggle (F key or mobile button)
     if input.KeyCode == Config.Fly.Keybind then
         Config.Fly.Enabled = not Config.Fly.Enabled
         if Config.Fly.Enabled then
@@ -2887,9 +2906,8 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         end
     end
     
-    -- UI toggle (Right Ctrl on PC)
     if input.KeyCode == Enum.KeyCode.RightControl then
-        local ui = CoreGui:FindFirstChild("Rayfield")
+        local ui = CoreGui:FindFirstChild("WindUI")
         if ui then
             ui.Enabled = not ui.Enabled
         end
@@ -2933,7 +2951,7 @@ if LocalPlayer.Character then
 end
 
 --====================================================================
--- SECTION 32: PERIODIC ROLE UPDATE (THROTTLED)
+-- SECTION 32: PERIODIC ROLE UPDATE
 --====================================================================
 
 task.spawn(function()
@@ -2954,26 +2972,22 @@ if initCharacter then
     OnCharacterAdded(initCharacter)
 end
 
-Rayfield:LoadConfiguration()
-
-Rayfield:Notify({
-    Title = "VEMP MM2 v3.0",
-    Content = "Loaded! Platform: " .. (IsMobile and "MOBILE" or "PC") .. " | Press Right Ctrl to toggle UI.",
+WindUI:Notify({
+    Title = "VEMP MM2 v4.0",
+    Description = "Loaded! Platform: " .. (IsMobile and "MOBILE" or "PC") .. " | Press Right Ctrl to toggle UI.",
     Duration = 6,
 })
 
 --====================================================================
--- END OF SCRIPT — VEMP MM2 ULTIMATE EDITION v3.0
--- 
--- v3.0 FIXES:
--- ✓ Silent Aim now works on mobile (touch + screen center targeting)
--- ✓ Auto Farm no longer lags (cached coins, separate thread, throttled)
--- ✓ Multi-executor namecall hook (hookmetamethod → getrawmetatable fallback)
--- ✓ Fixed "mururderer" typo in MurdererWarningSystem
--- ✓ Coin ESP throttled to 0.5s updates instead of every frame
--- ✓ Better gun remote detection (checks parent chain)
--- ✓ Executor capability auto-detection
--- ✓ Mobile fly controls
--- ✓ Smooth teleport option for auto farm
--- ✓ Configurable coin cache refresh interval
+-- END OF SCRIPT — VEMP MM2 ULTIMATE EDITION v4.0
+--
+-- v4.0 CHANGES:
+-- ✓ Switched UI from Rayfield to WindUI (Footagesus)
+-- ✓ WindUI modern interface with sections
+-- ✓ All features preserved from v3.0
+-- ✓ Mobile silent aim still works
+-- ✓ Optimized auto farm still works
+-- ✓ WindUI notifications instead of Rayfield
+-- ✓ Clean section organization per tab
+-- ✓ Descriptions on all UI elements
 --====================================================================
