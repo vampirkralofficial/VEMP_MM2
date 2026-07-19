@@ -1,19 +1,18 @@
---[[╔══════════════════════════════════════════════════════════════╗
-    ║                 VEMP MM2 — ULTIMATE v4.0                      ║
-    ║          Murder Mystery 2 Script by VEMP                      ║
-    ║      UI: Rayfield Gen2 (Sirius Menu Library)                 ║
-    ║        Version: 4.0.0 | Build: 5000+                         ║
-    ║                                                               ║
-    ║  v4.0 CHANGES:                                                ║
-    ║  ✓ Camera-based Silent Aim (mobilde KUSURSUZ çalışıyor)      ║
-    ║  ✓ Broadened gun remote detection (player has gun = intercept)║
-    ║  ✓ Multi-method hook chain (3 fallback yöntem)               ║
-    ║  ✓ Touch-tap shooting detection for mobile                   ║
-    ║  ✓ Trigger Bot for mobile (auto-fire on target)              ║
-    ║  ✓ Gravity-compensated prediction                            ║
-    ║  ✓ Optimized Auto Farm (cached, threaded, smooth)           ║
-    ║  ✓ Angular FOV targeting (screen-independent)               ║
-    ╚══════════════════════════════════════════════════════════════╝
+--[[
+ VEMP MM2 — ULTIMATE v4.0
+ Murder Mystery 2 Script by VEMP
+ UI: Rayfield Gen2 (Sirius Menu Library)
+ Version: 4.0.0 | Build: 5000+
+
+ v4.0 CHANGES:
+  - Camera-based Silent Aim (mobile fixed)
+  - Broadened gun remote detection (player has gun = intercept)
+  - Multi-method hook chain (3 fallback methods)
+  - Touch-tap shooting detection for mobile
+  - Trigger Bot for mobile (auto-fire on target)
+  - Gravity-compensated prediction
+  - Optimized Auto Farm (cached, threaded, smooth)
+  - Angular FOV targeting (screen-independent)
 ]]
 
 --====================================================================
